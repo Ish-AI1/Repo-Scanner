@@ -1,0 +1,19 @@
+# repo-scanner — Python dependencies for the ML scanner.
+#
+# The bootstrapper (install.ps1 / install.sh) installs these into the venv it
+# creates. torch is installed separately from the CPU wheel index (see below).
+#
+# Tested known-good: transformers 5.11.0, torch 2.12.0 (CPU), tokenizers 0.22.2,
+# safetensors 0.8.0, numpy 2.4.6, pytest 9.0.3.
+# Ranges (not exact pins) keep installs working across OSes and Python versions.
+# The DETECTOR's reproducibility is anchored by the pinned MODEL revision in
+# promptguard.py (MODEL_REVISION), not by torch's patch version.
+#
+# torch is NOT listed here — install it from the CPU index first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+transformers>=4.40,<6
+tokenizers>=0.19
+safetensors>=0.4
+numpy>=1.24
+pytest>=8

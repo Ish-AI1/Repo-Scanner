@@ -1,0 +1,6 @@
+# Moved: the canonical PINNED dependency list lives at ../requirements.txt
+# (skill root). This stub remains so old docs/links don't break.
+#
+# Install into your venv: <venv-python> -m pip install -r ../requirements.txt
+# For CPU-only torch: pip install torch --index-url https://download.pytorch.org/whl/cpu
+-r ../requirements.txt

@@ -1,0 +1,6 @@
+# Pin shell/PowerShell scripts to LF on every platform so their published
+# SHA256 (see README → Integrity) is identical regardless of OS / git autocrlf.
+*.sh  text eol=lf
+*.ps1 text eol=lf
+install.sh  text eol=lf
+install.ps1 text eol=lf

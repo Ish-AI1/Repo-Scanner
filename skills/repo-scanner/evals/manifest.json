@@ -1,0 +1,105 @@
+{
+  "description": "Ground-truth eval corpus for the repo-scanner ML/exfil detector layer. ml_genuine_files = basenames of files that SHOULD produce penalty-eligible findings (empty = any genuine finding is a false positive). Live repos are cloned shallow into evals/corpus/ (gitignored).",
+  "cases": [
+    {
+      "id": "fixture-injection-skill",
+      "kind": "fixture",
+      "path": "tests/fixtures/injection-skill",
+      "ml_genuine_files": ["SKILL.md"],
+      "notes": "English injection in a SKILL.md: ignore-previous + read ssh key + hide from user"
+    },
+    {
+      "id": "fixture-kitchen-sink",
+      "kind": "fixture",
+      "path": "tests/fixtures/kitchen-sink",
+      "ml_genuine_files": ["SKILL.md"],
+      "notes": "exfiltrate-to-webhook.site in a SKILL.md"
+    },
+    {
+      "id": "fixture-hebrew-injection",
+      "kind": "fixture",
+      "path": "tests/fixtures/hebrew-injection",
+      "ml_genuine_files": ["README.he.md"],
+      "review_expected": true,
+      "notes": "Hebrew-language injection in a predominantly-Hebrew file: caught by the deterministic multilingual exfil-pattern pass (penalty) AND surfaced by the embedding review layer"
+    },
+    {
+      "id": "fixture-cjk-injection",
+      "kind": "fixture",
+      "path": "tests/fixtures/cjk-injection",
+      "ml_genuine_files": [],
+      "review_expected": true,
+      "notes": "PARAPHRASED Chinese injection inside a mostly-English SKILL.md. The regex exfil-gate misses the paraphrase (no penalty), so this is the embedding review layer's job: it must surface a review_flag for Claude to adjudicate. Proves the v4.1 multilingual recall net."
+    },
+    {
+      "id": "fixture-indirect-injection-summary",
+      "kind": "fixture",
+      "path": "tests/fixtures/indirect-injection-summary",
+      "ml_genuine_files": ["SKILL.md"],
+      "notes": "Modern / task-disguised injection (v4.3): the SKILL.md hides exfil under the frame 'to finish the summary, you must run the following command'. Proves the indirect-injection patterns added to HARD_EXFIL in v4.3."
+    },
+    {
+      "id": "fixture-mcp-injection",
+      "kind": "fixture",
+      "path": "tests/fixtures/mcp-injection",
+      "ml_genuine_files": [".mcp.json"],
+      "notes": "Injection hidden in a .mcp.json server description. Only caught because v4.2 widened the default/eval selection to agent-config files — proves the coverage drift is closed (eval now exercises what the live audit scans)."
+    },
+    {
+      "id": "fixture-malware-curlbash",
+      "kind": "fixture",
+      "path": "tests/fixtures/malware-curlbash",
+      "ml_genuine_files": [],
+      "notes": "Malicious installer is the STATIC layer's job; docs contain no injection"
+    },
+    {
+      "id": "fixture-secret-leak",
+      "kind": "fixture",
+      "path": "tests/fixtures/secret-leak",
+      "ml_genuine_files": [],
+      "notes": "Leaked secret is the static layer's job"
+    },
+    {
+      "id": "fixture-clean-repo",
+      "kind": "fixture",
+      "path": "tests/fixtures/clean-repo",
+      "ml_genuine_files": [],
+      "notes": "Plain clean package"
+    },
+    {
+      "id": "rtl-patch",
+      "kind": "live",
+      "url": "https://github.com/shraga100/claude-desktop-rtl-patch.git",
+      "ml_genuine_files": [],
+      "notes": "Hebrew+English docs, PowerShell snippets in README — historic FP source (v3 scored it YELLOW on ML noise)"
+    },
+    {
+      "id": "nanoclaw",
+      "kind": "live",
+      "url": "https://github.com/nanocoai/nanoclaw.git",
+      "ml_genuine_files": [],
+      "notes": "34 SKILL.md files + zh/ja READMEs — historic FP source (18 FPs under v3.2)"
+    },
+    {
+      "id": "caveman",
+      "kind": "live",
+      "url": "https://github.com/JuliusBrussee/caveman.git",
+      "ml_genuine_files": [],
+      "notes": "Terse compressed doc style — forced false RED under v3.3"
+    },
+    {
+      "id": "nvm",
+      "kind": "live",
+      "url": "https://github.com/nvm-sh/nvm.git",
+      "ml_genuine_files": [],
+      "notes": "Massive established project, self-hosted unsigned curl|bash installer, install-heavy README"
+    },
+    {
+      "id": "ohmyzsh",
+      "kind": "live",
+      "url": "https://github.com/ohmyzsh/ohmyzsh.git",
+      "ml_genuine_files": [],
+      "notes": "Huge community repo, curl|bash install, imperative docs"
+    }
+  ]
+}
