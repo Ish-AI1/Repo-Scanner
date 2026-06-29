@@ -26,12 +26,13 @@ Reading every line yourself is slow and easy to get wrong. **Repo Scanner does t
 |-------|-------------------|
 | 🧷 **Install scripts** | `curl … \| bash`, `sudo`, certificate/registry changes, scheduled tasks, anything that runs at install time |
 | 🔑 **Secrets** | API keys, tokens, private keys — in the current files and in git history |
-| 📦 **Supply chain** | Missing lockfiles, typosquatted dependencies, sneaky `postinstall` scripts |
+| 📦 **Supply chain** | Missing lockfiles, typosquatted dependencies, sneaky `postinstall` scripts, **known CVEs in your declared dependencies via OSV.dev** |
 | 🧠 **Prompt injection** | Hidden instructions in skill/config files that try to hijack an AI agent — a local AI model + a deterministic multilingual rule layer + an optional cross-lingual review net |
+| 🐍 **Dangerous Python code** | `eval(base64.b64decode(...))`-style obfuscated payloads (including the 1-hop case via a local variable), `pickle.loads`/`yaml.load` deserialization, `os.system`/`subprocess(shell=True)` with dynamic commands — caught by an AST walk, not just regex |
 | 🌐 **Where it phones home** | Every URL the code talks to, expected vs. suspicious |
 | 👥 **Reputation** | Stars, contributors, age — weighed as a bounded tiebreaker, never a free pass |
 
-It produces a 0–100 score and writes a full report to disk.
+It produces a 0–100 score and writes a full report to disk. Every finding is tagged with its **OWASP Top 10 for LLM Applications / OWASP Agentic AI** category (`LLM01 Prompt Injection`, `LLM03 Supply Chain`, `LLM06 Excessive Agency`, `MAL Malicious Code/RCE`, etc.) so a reviewer who speaks the OWASP vocabulary can read the report at a glance. When `mcp__visualize__show_widget` is available in your Claude Code session, the report also renders inline as a compact visual card alongside the on-disk Markdown.
 
 ## What a result looks like
 

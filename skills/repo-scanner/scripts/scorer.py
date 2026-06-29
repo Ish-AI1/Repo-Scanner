@@ -58,7 +58,7 @@ import json
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-SCORER_VERSION = "1.0.0"
+SCORER_VERSION = "1.1.0"
 
 # ---- Penalty matrix (negative numbers) ----
 # Each key maps to (per_occurrence_penalty, max_total_cap_or_None)
@@ -85,6 +85,16 @@ PENALTIES = {
     "young_repo_with_installers": (-20, None),
     "suspicious_network_domain":  (-15, None),
     "secret_in_history":          (-10, None),
+    # AST-based dangerous-code findings (ast_scan.py)
+    "obfuscated_code_execution":  (-30, None),   # decode-then-execute (the obfuscated-payload signature)
+    "command_injection_surface":  (-10, -20),    # os.system / shell=True with a dynamic command
+    "unsafe_deserialization":     (-10, -20),    # pickle/marshal/yaml.load on untrusted data (CWE-502)
+    "dynamic_code_execution":     (-8, -24),     # eval/exec/compile with no decode chain — note-level
+    # OSV (osv_lookup.py) — known-CVE in a declared dependency
+    "vulnerable_dependency_critical": (-25, -50),  # CRITICAL CVE
+    "vulnerable_dependency_high":     (-15, -45),  # HIGH CVE
+    "vulnerable_dependency_medium":   (-5,  -25),  # MEDIUM
+    "vulnerable_dependency_low":      (-2,  -10),  # LOW / informational
 }
 
 # ---- Mitigation matrix (positive numbers) ----
@@ -139,6 +149,57 @@ GREEN_MIN = 70
 YELLOW_MIN = 55
 
 
+# ---- OWASP threat-category mapping ----
+# Each penalty type maps to (category_id, short_title). Primary references:
+#   - OWASP Top 10 for LLM Applications 2025 (LLM01–LLM10)
+#   - OWASP Agentic AI Top 10 (AAI01–AAI10)
+#   - Generic "Repo Hygiene" for non-LLM-specific provenance signals
+# The category is an annotation only — it never changes the score. Its job is
+# to make every finding immediately legible to a reviewer who knows the OWASP
+# vocabulary, instead of forcing them to interpret internal penalty keys.
+OWASP_CATEGORY = {
+    "hard_fail":                      ("LLM03", "Supply Chain"),
+    "ml_injection_genuine_high":      ("LLM01", "Prompt Injection"),
+    "ml_injection_genuine_mid":       ("LLM01", "Prompt Injection"),
+    "sandbox_disabled_install":       ("LLM06", "Excessive Agency"),
+    "sandbox_disabled_dev":           ("LLM06", "Excessive Agency"),
+    "sandbox_disabled":               ("LLM06", "Excessive Agency"),
+    "root_ca_modification":           ("AAI03", "Privilege Escalation"),
+    "scheduled_task_root":            ("AAI03", "Privilege Escalation"),
+    "curl_pipe_bash_unsigned":        ("LLM03", "Supply Chain"),
+    "curl_pipe_bash_vendor_official": ("LLM03", "Supply Chain"),
+    "curl_pipe_bash_signed":          ("LLM03", "Supply Chain"),
+    "dangerous_skip_permissions":     ("LLM06", "Excessive Agency"),
+    "suspicious_dependency":          ("LLM03", "Supply Chain"),
+    "floating_versions":              ("LLM03", "Supply Chain"),
+    "missing_lockfile":               ("LLM03", "Supply Chain"),
+    "postinstall_script":             ("LLM03", "Supply Chain"),
+    "suspicious_network_domain":      ("AAI06", "Data Exfiltration"),
+    "secret_in_history":              ("LLM02", "Sensitive Information Disclosure"),
+    "no_license":                     ("HYGIENE", "Repo Hygiene"),
+    "no_readme":                      ("HYGIENE", "Repo Hygiene"),
+    "anonymous_author":               ("HYGIENE", "Repo Hygiene"),
+    "young_repo_with_installers":     ("HYGIENE", "Repo Hygiene"),
+    # AST-based code-execution findings (CWE-94 / CWE-502). No clean OWASP-LLM
+    # category fits "the repo's own code does eval(decode())", so an honest
+    # dedicated bucket is used (same pattern as HYGIENE).
+    "obfuscated_code_execution":      ("MAL", "Malicious Code / RCE"),
+    "command_injection_surface":      ("MAL", "Malicious Code / RCE"),
+    "unsafe_deserialization":         ("MAL", "Malicious Code / RCE"),
+    "dynamic_code_execution":         ("MAL", "Malicious Code / RCE"),
+    # OSV CVE findings — maps cleanly to OWASP LLM Supply Chain bucket
+    "vulnerable_dependency_critical": ("LLM03", "Supply Chain"),
+    "vulnerable_dependency_high":     ("LLM03", "Supply Chain"),
+    "vulnerable_dependency_medium":   ("LLM03", "Supply Chain"),
+    "vulnerable_dependency_low":      ("LLM03", "Supply Chain"),
+}
+
+
+def owasp_for(penalty_type):
+    """Return (id, title) for a penalty type; ("OTHER", "Uncategorized") fallback."""
+    return OWASP_CATEGORY.get(penalty_type, ("OTHER", "Uncategorized"))
+
+
 def compute(data):
     findings = data.get("findings", [])
     mitigations = data.get("mitigations", [])
@@ -176,7 +237,9 @@ def compute(data):
         if per <= -100:
             forced_red = True
         penalty_total += applied
-        breakdown.append({"type": t, "count": total_count, "applied": applied})
+        owasp_id, owasp_title = owasp_for(t)
+        breakdown.append({"type": t, "count": total_count, "applied": applied,
+                          "owasp": owasp_id, "owasp_title": owasp_title})
 
     # Mitigations — pairing enforced: full credit only when the mitigation
     # addresses a finding type that is actually present; otherwise half.

@@ -12,6 +12,42 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 import scorer  # noqa: E402
 
 
+def test_owasp_category_present_on_every_finding():
+    """Every penalty in the breakdown carries an OWASP category and title."""
+    data = {
+        "findings": [
+            {"type": "curl_pipe_bash_unsigned", "count": 1},
+            {"type": "sandbox_disabled_install", "count": 1},
+            {"type": "secret_in_history", "count": 1},
+            {"type": "ml_injection_genuine_high", "count": 1},
+            {"type": "root_ca_modification", "count": 1},
+        ],
+    }
+    r = scorer.compute(data)
+    by_type = {b["type"]: b for b in r["breakdown"] if "type" in b and "owasp" in b}
+    assert by_type["curl_pipe_bash_unsigned"]["owasp"] == "LLM03"
+    assert by_type["sandbox_disabled_install"]["owasp"] == "LLM06"
+    assert by_type["secret_in_history"]["owasp"] == "LLM02"
+    assert by_type["ml_injection_genuine_high"]["owasp"] == "LLM01"
+    assert by_type["root_ca_modification"]["owasp"] == "AAI03"
+    for b in by_type.values():
+        assert b["owasp_title"], f"{b['type']} missing owasp_title"
+
+
+def test_owasp_coverage_for_all_penalty_types():
+    """Every penalty type the scorer knows about must have an OWASP mapping
+    (or fall through to OTHER on purpose). Prevents silently dropping mappings
+    when new penalty types are added later."""
+    for ptype in scorer.PENALTIES:
+        cid, title = scorer.owasp_for(ptype)
+        assert cid, f"{ptype} has no OWASP id"
+        assert title, f"{ptype} has no OWASP title"
+        # OTHER would mean an unmapped key — log it explicitly here so it's not
+        # silently accepted. If you intentionally add an unmappable penalty,
+        # update OWASP_CATEGORY first.
+        assert cid != "OTHER", f"{ptype} fell through to OTHER — add it to OWASP_CATEGORY"
+
+
 def test_benchmark_rtl_patch():
     """shraga100/claude-desktop-rtl-patch — calibration anchor: 88 GREEN."""
     data = {
